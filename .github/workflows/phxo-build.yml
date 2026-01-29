@@ -1,0 +1,57 @@
+name: PHXO QuickSupport Build (Windows)
+
+on:
+  workflow_dispatch:
+
+jobs:
+  build:
+    runs-on: windows-latest
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          submodules: recursive
+
+      - name: Setup Rust
+        uses: dtolnay/rust-toolchain@stable
+
+      - name: Install LLVM
+        run: |
+          choco install llvm --version=15.0.2 -y
+          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+
+      - name: Install vcpkg dependencies
+        run: |
+          git clone https://github.com/microsoft/vcpkg C:\vcpkg
+          C:\vcpkg\bootstrap-vcpkg.bat
+          C:\vcpkg\vcpkg.exe install libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static aom:x64-windows-static
+          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+
+      - name: Download sciter.dll
+        run: |
+          mkdir target\release
+          curl -L https://raw.githubusercontent.com/c-smile/sciter-sdk/master/bin.win/x64/sciter.dll -o target\release\sciter.dll
+
+      - name: Inject PHXO server config
+        env:
+          RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+          RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
+        run: |
+          $cfg = "libs/hbb_common/src/config.rs"
+
+          (Get-Content $cfg -Raw) `
+          -replace 'pub const RENDEZVOUS_SERVERS:.*?;', "pub const RENDEZVOUS_SERVERS: &'static [&'static str] = &[`"$env:RENDEZVOUS_SERVER`"];" `
+          -replace 'pub const RS_PUB_KEY:.*?;', "pub const RS_PUB_KEY: &'static str = `"$env:RS_PUB_KEY`";" `
+          | Set-Content $cfg
+
+      - name: Build RustDesk
+        run: cargo build --release
+
+      - name: Upload artifact
+        uses: actions/upload-artifact@v4
+        with:
+          name: PHXO-QuickSupport
+          path: |
+            target/release/rustdesk.exe
+            target/release/sciter.dll
