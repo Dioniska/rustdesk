@@ -12,38 +12,85 @@ jobs:
         uses: actions/checkout@v4
         with:
           submodules: recursive
+          fetch-depth: 0
 
       - name: Setup Rust
         uses: dtolnay/rust-toolchain@stable
 
-      - name: Install LLVM
+      - name: Use preinstalled LLVM (set LIBCLANG_PATH)
+        shell: pwsh
         run: |
-          choco install llvm --version=15.0.2 -y
-          echo "LIBCLANG_PATH=C:\Program Files\LLVM\bin" >> $env:GITHUB_ENV
+          $p1 = "C:\Program Files\LLVM\bin"
+          $p2 = "C:\Program Files\LLVM\lib"
+          if (Test-Path $p1) {
+            "LIBCLANG_PATH=$p1" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "Using LLVM at $p1"
+          } elseif (Test-Path $p2) {
+            "LIBCLANG_PATH=$p2" | Out-File -FilePath $env:GITHUB_ENV -Append
+            Write-Host "Using LLVM at $p2"
+          } else {
+            throw "LLVM not found on runner"
+          }
+
+      - name: Install build tools (cmake, ninja)
+        run: |
+          choco install cmake ninja -y
 
       - name: Install vcpkg dependencies
+        shell: pwsh
         run: |
           git clone https://github.com/microsoft/vcpkg C:\vcpkg
           C:\vcpkg\bootstrap-vcpkg.bat
-          C:\vcpkg\vcpkg.exe install libvpx:x64-windows-static libyuv:x64-windows-static opus:x64-windows-static aom:x64-windows-static
-          echo "VCPKG_ROOT=C:\vcpkg" >> $env:GITHUB_ENV
+          "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "VCPKG_DEFAULT_TRIPLET=x64-windows-static" | Out-File -FilePath $env:GITHUB_ENV -Append
+
+          C:\vcpkg\vcpkg.exe install `
+            libvpx:x64-windows-static `
+            libyuv:x64-windows-static `
+            opus:x64-windows-static `
+            aom:x64-windows-static
 
       - name: Download sciter.dll
+        shell: pwsh
         run: |
-          mkdir target\release
+          New-Item -ItemType Directory -Force -Path target\release | Out-Null
           curl -L https://raw.githubusercontent.com/c-smile/sciter-sdk/master/bin.win/x64/sciter.dll -o target\release\sciter.dll
 
-      - name: Inject PHXO server config
+      - name: Inject PHXO server config (safe)
+        shell: pwsh
         env:
           RENDEZVOUS_SERVER: ${{ secrets.RENDEZVOUS_SERVER }}
+          RELAY_SERVER: ${{ secrets.RELAY_SERVER }}
           RS_PUB_KEY: ${{ secrets.RS_PUB_KEY }}
         run: |
           $cfg = "libs/hbb_common/src/config.rs"
+          if (!(Test-Path $cfg)) { throw "Config file not found: $cfg" }
 
-          (Get-Content $cfg -Raw) `
-          -replace 'pub const RENDEZVOUS_SERVERS:.*?;', "pub const RENDEZVOUS_SERVERS: &'static [&'static str] = &[`"$env:RENDEZVOUS_SERVER`"];" `
-          -replace 'pub const RS_PUB_KEY:.*?;', "pub const RS_PUB_KEY: &'static str = `"$env:RS_PUB_KEY`";" `
-          | Set-Content $cfg
+          $s = Get-Content $cfg -Raw
+
+          if ($s -notmatch "RENDEZVOUS_SERVERS") { throw "RENDEZVOUS_SERVERS not found" }
+          $s = [regex]::Replace(
+            $s,
+            'pub const RENDEZVOUS_SERVERS:\s*&''static\s*\[&''static str\]\s*=\s*&\[[^\]]*\];',
+            "pub const RENDEZVOUS_SERVERS: &'static [&'static str] = &[`"$env:RENDEZVOUS_SERVER`"];"
+          )
+
+          if ($s -match "RELAY_SERVERS") {
+            $s = [regex]::Replace(
+              $s,
+              'pub const RELAY_SERVERS:\s*&''static\s*\[&''static str\]\s*=\s*&\[[^\]]*\];',
+              "pub const RELAY_SERVERS: &'static [&'static str] = &[`"$env:RELAY_SERVER`"];"
+            )
+          }
+
+          if ($s -notmatch "RS_PUB_KEY") { throw "RS_PUB_KEY not found" }
+          $s = [regex]::Replace(
+            $s,
+            'pub const RS_PUB_KEY:\s*&''static str\s*=\s*".*?";',
+            "pub const RS_PUB_KEY: &'static str = `"$env:RS_PUB_KEY`";"
+          )
+
+          Set-Content -Path $cfg -Value $s -NoNewline
 
       - name: Build RustDesk
         run: cargo build --release
