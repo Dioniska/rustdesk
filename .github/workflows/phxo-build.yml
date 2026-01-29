@@ -36,19 +36,19 @@ jobs:
         run: |
           choco install cmake ninja -y
 
-      - name: Install vcpkg dependencies
+      - name: Install vcpkg dependencies (classic mode)
         shell: pwsh
         run: |
+          if (Test-Path "C:\vcpkg") { Remove-Item -Recurse -Force "C:\vcpkg" }
           git clone https://github.com/microsoft/vcpkg C:\vcpkg
-          C:\vcpkg\bootstrap-vcpkg.bat
-          "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
-          "VCPKG_DEFAULT_TRIPLET=x64-windows-static" | Out-File -FilePath $env:GITHUB_ENV -Append
+          C:\vcpkg\bootstrap-vcpkg.bat -disableMetrics
 
-          C:\vcpkg\vcpkg.exe install `
-            libvpx:x64-windows-static `
-            libyuv:x64-windows-static `
-            opus:x64-windows-static `
-            aom:x64-windows-static
+          "VCPKG_ROOT=C:\vcpkg" | Out-File -FilePath $env:GITHUB_ENV -Append
+          "VCPKG_DISABLE_METRICS=1" | Out-File -FilePath $env:GITHUB_ENV -Append
+          
+          C:\vcpkg\vcpkg.exe install --classic --triplet x64-windows-static `
+            libvpx libyuv opus aom
+
 
       - name: Download sciter.dll
         shell: pwsh
